@@ -4,8 +4,10 @@ package update
 
 import (
 	"context"
+	"encoding/json"
 	"fmt"
 	"io"
+	"path"
 	"strings"
 	"time"
 
@@ -42,6 +44,46 @@ type Engine struct {
 	// MainRev is the nixpkgs revision of the flake's own input, used to decide
 	// whether a pin is stale.
 	MainRev string
+	// Settings resolves the platform and nixpkgs config of the user's flake.
+	// It is a function because it costs an evaluation, and only update and pin
+	// need it. The result is cached in the engine for the run.
+	Settings func(ctx context.Context) (*pkgset.Settings, error)
+
+	settings *pkgset.Settings
+}
+
+// nixpkgs renders the import a candidate package is looked up through. It is
+// deliberately the same import the generated overlay performs -- same
+// revision, same hash, same platform, same config subset -- so the version nup
+// shows and the path nup builds are exactly what the system will end up with.
+// Going through the flake reference instead would evaluate with an empty
+// nixpkgs config and, for example, refuse every unfree package.
+func (e *Engine) nixpkgs(ctx context.Context, rev, sha256 string) (string, error) {
+	if e.settings == nil {
+		if e.Settings == nil {
+			return "", fmt.Errorf("no nixpkgs settings resolver configured")
+		}
+		s, err := e.Settings(ctx)
+		if err != nil {
+			return "", err
+		}
+		e.settings = s
+	}
+	cfg, err := json.Marshal(e.settings.Config)
+	if err != nil {
+		return "", fmt.Errorf("encoding the nixpkgs configuration: %w", err)
+	}
+	return fmt.Sprintf(`import (builtins.fetchTarball { url = %q; sha256 = %q; }) { system = %q; config = builtins.fromJSON %s; }`,
+		nix.TarballURL(rev), sha256, e.settings.System, nix.String(string(cfg))), nil
+}
+
+// attrExpr is nixpkgs with an attribute path selected.
+func (e *Engine) attrExpr(ctx context.Context, rev, sha256, attr string) (string, error) {
+	base, err := e.nixpkgs(ctx, rev, sha256)
+	if err != nil {
+		return "", err
+	}
+	return fmt.Sprintf("(%s).%s", base, attr), nil
 }
 
 // Request describes one package to update or pin.
@@ -89,6 +131,20 @@ type Plan struct {
 
 	// Unchanged is true when the target version equals the installed one.
 	Unchanged bool
+
+	// InstalledName is the derivation name actually installed. When it differs
+	// from the candidate's, the configuration wraps or overrides the attribute
+	// -- vscode-with-extensions.override rather than plain vscode -- and the two
+	// closures are not comparable, so nup skips the diff instead of showing a
+	// misleading one.
+	InstalledName string
+	CandidateName string
+}
+
+// Wrapped reports whether the installed derivation is a wrapper or override of
+// the nixpkgs attribute rather than the attribute itself.
+func (p *Plan) Wrapped() bool {
+	return p.InstalledName != "" && p.CandidateName != "" && p.InstalledName != p.CandidateName
 }
 
 // SizeDelta is the change in closure size in bytes.
@@ -289,7 +345,7 @@ func (e *Engine) Prepare(ctx context.Context, req Request, progress func(string)
 
 	report("evaluating new version")
 	ectx, cancel := context.WithTimeout(ctx, EvalTimeout)
-	meta, err := e.evalMeta(ectx, rev, attr)
+	meta, err := e.evalMeta(ectx, rev, sha, attr)
 	cancel()
 	if err != nil {
 		return nil, err
@@ -315,7 +371,11 @@ func (e *Engine) Prepare(ctx context.Context, req Request, progress func(string)
 	report("building " + attr)
 	bctx, cancel := context.WithTimeout(ctx, BuildTimeout)
 	defer cancel()
-	paths, err := e.Nix.Build(bctx, fmt.Sprintf("%s#%s", nix.FlakeRef(rev), attr))
+	buildExpr, err := e.attrExpr(ctx, rev, sha, attr)
+	if err != nil {
+		return nil, err
+	}
+	paths, err := e.Nix.BuildExpr(bctx, buildExpr)
 	if err != nil {
 		return nil, fmt.Errorf("building %s from nixpkgs %s: %w", attr, lock.ShortRev(rev), err)
 	}
@@ -331,6 +391,16 @@ func (e *Engine) Prepare(ctx context.Context, req Request, progress func(string)
 	if plan.OldOutPath == "" {
 		// Nothing installed to compare against (a fresh pin of a package that
 		// is not in the configuration yet): the diff is simply skipped.
+		return plan, nil
+	}
+
+	plan.InstalledName = derivationName(plan.OldOutPath)
+	plan.CandidateName = derivationName(plan.NewOutPath)
+	if plan.Wrapped() {
+		// Diffing a wrapper against the bare attribute compares two different
+		// derivations: every dependency the wrapper adds would be reported as
+		// removed. The version bump above is still correct, so the plan is
+		// returned without a closure diff and the summary explains why.
 		return plan, nil
 	}
 
@@ -356,16 +426,20 @@ type pkgMeta struct {
 	Out string `json:"out"`
 }
 
-// evalMeta reads version and metadata in a single evaluation.
-func (e *Engine) evalMeta(ctx context.Context, rev, attr string) (*pkgMeta, error) {
+// evalMeta reads version, default output and metadata in a single evaluation.
+func (e *Engine) evalMeta(ctx context.Context, rev, sha256, attr string) (*pkgMeta, error) {
 	const apply = `p: {
   version = p.version or "";
   out = p.outPath or "";
   changelog = let c = p.meta.changelog or ""; in if builtins.isList c then (if c == [] then "" else builtins.head c) else c;
   homepage = let h = p.meta.homepage or ""; in if builtins.isList h then (if h == [] then "" else builtins.head h) else h;
 }`
+	expr, err := e.attrExpr(ctx, rev, sha256, attr)
+	if err != nil {
+		return nil, err
+	}
 	var m pkgMeta
-	if err := e.Nix.EvalJSON(ctx, fmt.Sprintf("%s#%s", nix.FlakeRef(rev), attr), apply, &m); err != nil {
+	if err := e.Nix.EvalExprJSON(ctx, expr, apply, &m); err != nil {
 		return nil, fmt.Errorf("evaluating %s from nixpkgs %s: %w", attr, lock.ShortRev(rev), err)
 	}
 	return &m, nil
@@ -408,6 +482,18 @@ func (e *Engine) Unpin(names []string) ([]string, error) {
 		return nil, err
 	}
 	return removed, nil
+}
+
+// derivationName is the package name of a store path, without the hash prefix
+// and without the version: /nix/store/<hash>-vscode-with-extensions-1.136.1
+// becomes vscode-with-extensions.
+func derivationName(storePath string) string {
+	base := path.Base(storePath)
+	if i := strings.Index(base, "-"); i >= 0 {
+		base = base[i+1:]
+	}
+	name, _ := pkgset.SplitName(base)
+	return name
 }
 
 // CommitMessage describes a set of applied plans.

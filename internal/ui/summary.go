@@ -79,6 +79,20 @@ func renderPlan(p *update.Plan, maxEntries int) string {
 		b.WriteString(field("homepage", s.Blue.Render(p.Homepage)))
 	}
 
+	if p.Wrapped() {
+		b.WriteByte('\n')
+		fmt.Fprintf(&b, "  %s your configuration installs %s, not the plain %s attribute.\n",
+			s.Warning.Render("note:"), s.Bold.Render(p.InstalledName), s.Bold.Render(p.CandidateName))
+		for _, line := range []string{
+			"No closure diff: the two are different derivations, so every dependency the",
+			"wrapper adds would show up as removed. The version above is still correct, and",
+			"the pin reaches the wrapper as long as it takes the attribute from the package set.",
+		} {
+			fmt.Fprintf(&b, "  %s\n", s.Dim.Render(line))
+		}
+		return b.String()
+	}
+
 	if len(p.Entries) > 0 {
 		b.WriteByte('\n')
 		b.WriteString(renderEntries(p.Entries, maxEntries))

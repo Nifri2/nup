@@ -38,6 +38,12 @@ Because every fetch carries its hash, the overlay **evaluates in pure mode** —
 `--impure`, no `--no-pure-eval`. Packages you have not pinned are untouched and
 still come from your own nixpkgs input.
 
+When nup looks a candidate up in another revision it performs *the same import*
+the overlay does — same tarball, same platform, same nixpkgs config subset
+(`allowUnfree`, `permittedInsecurePackages`, …). What nup shows you is therefore
+what your system will actually build, and unfree packages resolve exactly as they
+do in your configuration.
+
 nup reads and writes only JSON. It never parses Nix code and never edits your
 `flake.nix` — you wire the overlay in once, by hand.
 
@@ -269,6 +275,15 @@ it.
   `python3.withPackages`. Pin the top-level package where you can.
 - **GitHub only.** The overlay fetches from `github.com/NixOS/nixpkgs`. Forks and
   other mirrors are not supported yet.
+- **Wrapped packages.** If your configuration installs an override or wrapper —
+  `vscode-with-extensions.override { ... }` rather than plain `vscode` — nup
+  reports the version bump but skips the closure diff, because comparing a
+  wrapper against the bare attribute would list every wrapped-in dependency as
+  removed. The pin still reaches the wrapper as long as it takes the attribute
+  from the package set, which `callPackage`-based wrappers in nixpkgs do.
+- **Config predicates.** `allowUnfreePredicate` and friends are functions and
+  cannot be carried into the pinned import; plain `allowUnfree` and
+  `permittedInsecurePackages` are.
 - **Impure configurations.** If your flake needs `--impure` — an `IFD`, a module
   reading an absolute path, `builtins.fetchTarball` without a hash — set
   `impure: true` in the config or pass `--impure`. nup only applies it to your own

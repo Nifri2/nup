@@ -38,3 +38,30 @@ func Write(path string, force bool) (written bool, err error) {
 
 // Snippet is what `nup init` prints for the user to paste into their config.
 const Snippet = `  nixpkgs.overlays = [ (import ./nup-overlay.nix) ];`
+
+// InheritedConfigKeys are the nixpkgs config options carried from the main
+// nixpkgs into a pinned import. They are the single source of truth: the
+// generated overlay lists exactly these, and nup uses the same set when it
+// evaluates or builds a candidate package, so what nup shows is what the
+// system will get.
+//
+// `pkgs.config` is the *evaluated* config and also contains module outputs,
+// nulls and functions, none of which a fresh `import nixpkgs` accepts, so it
+// can never be forwarded wholesale.
+var InheritedConfigKeys = []string{
+	"allowAliases",
+	"allowBroken",
+	"allowInsecurePredicate",
+	"allowUnfree",
+	"allowUnfreePredicate",
+	"allowUnsupportedSystem",
+	"android_sdk",
+	"checkMeta",
+	"cudaCapabilities",
+	"cudaForwardCompat",
+	"cudaSupport",
+	"joypixels",
+	"permittedInsecurePackages",
+	"rocmSupport",
+	"segger-jlink",
+}

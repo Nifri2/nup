@@ -174,3 +174,19 @@ func TestEvalImpureIsOptIn(t *testing.T) {
 		t.Error("Impure(false) must not add the flag")
 	}
 }
+
+func TestString(t *testing.T) {
+	// A Nix string literal must escape backslashes, quotes and the start of an
+	// antiquotation; JSON payloads contain all three.
+	cases := map[string]string{
+		`{"a":true}`:    `"{\"a\":true}"`,
+		`back\slash`:    `"back\\slash"`,
+		`${notAnAntiq}`: `"\${notAnAntiq}"`,
+		"tab\there":     `"tab\there"`,
+	}
+	for in, want := range cases {
+		if got := String(in); got != want {
+			t.Errorf("String(%q) = %s, want %s", in, got, want)
+		}
+	}
+}

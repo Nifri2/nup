@@ -104,3 +104,24 @@ func TestShouldColorRespectsNoColorEnv(t *testing.T) {
 		t.Error("NO_COLOR must disable color")
 	}
 }
+
+// A wrapper such as vscode-with-extensions is a different derivation from the
+// bare attribute, so nup must say so instead of showing a closure diff in which
+// every extension looks removed.
+func TestWrappedPackageExplainsTheMissingDiff(t *testing.T) {
+	SetColor(false)
+	p := plan()
+	p.Name = "vscode"
+	p.InstalledName = "vscode-with-extensions"
+	p.CandidateName = "vscode"
+	p.Entries = nil
+	p.OldSize, p.NewSize = 0, 0
+
+	out := RenderSummary([]*update.Plan{p}, SummaryOptions{})
+	if !strings.Contains(out, "vscode-with-extensions") || !strings.Contains(out, "No closure diff") {
+		t.Errorf("expected an explanation:\n%s", out)
+	}
+	if strings.Contains(out, "closure  ") {
+		t.Errorf("no closure line should be shown:\n%s", out)
+	}
+}

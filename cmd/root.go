@@ -192,6 +192,9 @@ func (a *App) setup(cmd *cobra.Command) error {
 		Lock:     a.Lock,
 		Branch:   cfg.Branch,
 		MainRev:  a.MainRev,
+		Settings: func(ctx context.Context) (*pkgset.Settings, error) {
+			return a.Lister.Settings(ctx, pkgset.Options{Refresh: a.Refresh})
+		},
 	}
 	return nil
 }

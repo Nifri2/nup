@@ -4,12 +4,15 @@ package pkgset
 import (
 	"context"
 	"fmt"
+	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"time"
 
 	"github.com/Nifri2/nup/internal/lock"
 	"github.com/Nifri2/nup/internal/nix"
+	"github.com/Nifri2/nup/internal/overlay"
 )
 
 // Source says where a package comes from.
@@ -298,3 +301,53 @@ func Find(pkgs []Package, name string) []Package {
 // DefaultTimeout bounds a single evaluation; NixOS configurations are slow but
 // not unbounded.
 const DefaultTimeout = 10 * time.Minute
+
+// Settings is the platform and the nixpkgs configuration a flake evaluates
+// with. nup reuses them when it looks a candidate package up in another nixpkgs
+// revision, so the lookup sees the same allowUnfree, permittedInsecurePackages
+// and friends the system does.
+type Settings struct {
+	System string         `json:"system"`
+	Config map[string]any `json:"config"`
+}
+
+// settingsExpr keeps only JSON-representable values. Predicates such as
+// allowUnfreePredicate are functions and cannot cross the process boundary;
+// they are dropped rather than guessed at.
+func settingsExpr() string {
+	quoted := make([]string, 0, len(overlay.InheritedConfigKeys))
+	for _, k := range overlay.InheritedConfigKeys {
+		quoted = append(quoted, strconv.Quote(k))
+	}
+	return `p: {
+  system = p.stdenv.hostPlatform.system;
+  config = builtins.listToAttrs (builtins.concatMap (k:
+    let v = p.config.${k} or null; in
+    if v != null && (builtins.isBool v || builtins.isString v || builtins.isInt v
+                     || (builtins.isList v && builtins.all builtins.isString v))
+    then [ { name = k; value = v; } ]
+    else [ ]) [ ` + strings.Join(quoted, " ") + ` ]);
+}`
+}
+
+// Settings evaluates the flake's platform and nixpkgs config. The result is
+// cached: it only changes when the flake's inputs change.
+func (l *Lister) Settings(ctx context.Context, opts Options) (*Settings, error) {
+	key := nix.Key("settings", l.FlakeDir, l.Host, nix.HashFile(filepath.Join(l.FlakeDir, "flake.lock")))
+
+	var s Settings
+	if !opts.Refresh && l.Cache.Get(key, 0, &s) && s.System != "" {
+		return &s, nil
+	}
+	installable := fmt.Sprintf("%s#nixosConfigurations.%s.pkgs", l.FlakeDir, l.Host)
+	if err := l.Nix.EvalJSON(ctx, installable, settingsExpr(), &s, nix.Impure(l.Impure)); err != nil {
+		return nil, fmt.Errorf("reading the nixpkgs configuration of host %q: %w", l.Host, err)
+	}
+	if s.Config == nil {
+		s.Config = map[string]any{}
+	}
+	if l.Cache != nil {
+		_ = l.Cache.Put(key, s)
+	}
+	return &s, nil
+}

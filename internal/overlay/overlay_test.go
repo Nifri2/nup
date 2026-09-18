@@ -3,6 +3,7 @@ package overlay
 import (
 	"os"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"testing"
 )
@@ -79,5 +80,33 @@ func TestWriteKeepsExistingFile(t *testing.T) {
 func TestPath(t *testing.T) {
 	if got := Path("/etc/nixos"); got != "/etc/nixos/nup-overlay.nix" {
 		t.Errorf("got %q", got)
+	}
+}
+
+// The Go list and the list inside the generated overlay must stay identical:
+// otherwise nup would evaluate a candidate with a different nixpkgs config than
+// the overlay later applies, and could show a package the system never builds.
+func TestInheritedConfigKeysMatchTheOverlay(t *testing.T) {
+	src := Source()
+	start := strings.Index(src, "inheritedConfigKeys = [")
+	if start < 0 {
+		t.Fatal("the overlay no longer declares inheritedConfigKeys")
+	}
+	end := strings.Index(src[start:], "];")
+	if end < 0 {
+		t.Fatal("unterminated inheritedConfigKeys list")
+	}
+	body := src[start+len("inheritedConfigKeys = [") : start+end]
+
+	var inNix []string
+	for _, line := range strings.Split(body, "\n") {
+		line = strings.TrimSpace(line)
+		if line == "" {
+			continue
+		}
+		inNix = append(inNix, strings.Trim(line, `"`))
+	}
+	if !reflect.DeepEqual(inNix, InheritedConfigKeys) {
+		t.Errorf("overlay lists\n  %v\nbut Go lists\n  %v", inNix, InheritedConfigKeys)
 	}
 }

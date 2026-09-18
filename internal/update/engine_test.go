@@ -31,13 +31,15 @@ func newTestEngine(t *testing.T, extra map[string]string) (*Engine, *nix.FakeRun
 		"flake metadata github:NixOS/nixpkgs/nixos-unstable": `{"locked":{"rev":"` + testRev +
 			`","narHash":"` + testHash + `","lastModified":1758016076}}`,
 		// CheckTarball: the hash resolves, so no prefetch fallback is needed.
-		"builtins.fetchTarball": "/nix/store/source",
+		// The pattern is narrow on purpose: every candidate evaluation now also
+		// contains builtins.fetchTarball.
+		"eval --raw --expr builtins.fetchTarball": "/nix/store/source",
 		// AttrExists
 		"--apply p: true": "true",
 		// evalMeta
 		"changelog = let c": `{"version":"14.1.1","out":"` + newOutPath +
 			`","changelog":"https://example.invalid/changelog","homepage":"https://example.invalid"}`,
-		"build --no-link --print-out-paths": newOutPath + "\n",
+		"build --no-link --print-out-paths --expr": newOutPath + "\n",
 		"store diff-closures": "pcre2: 10.43 → 10.44, 12.0 KiB\n" +
 			"ripgrep: 14.1.0 → 14.1.1, 4.0 KiB\n",
 		"path-info -S --json " + oldOutPath: `{"` + oldOutPath + `":{"closureSize":1000000}}`,
@@ -58,6 +60,12 @@ func newTestEngine(t *testing.T, extra map[string]string) (*Engine, *nix.FakeRun
 		Lock:     lf,
 		Branch:   config.DefaultBranch,
 		MainRev:  "0000000000000000000000000000000000000000",
+		Settings: func(context.Context) (*pkgset.Settings, error) {
+			return &pkgset.Settings{
+				System: "x86_64-linux",
+				Config: map[string]any{"allowUnfree": true},
+			}, nil
+		},
 	}, fake, dir
 }
 
@@ -108,7 +116,7 @@ func TestPrepareFullPipeline(t *testing.T) {
 	if len(steps) == 0 {
 		t.Error("progress callback was never called")
 	}
-	if !fake.Called("build --no-link") {
+	if !fake.Called("build --no-link --print-out-paths --expr") {
 		t.Error("the package should have been built")
 	}
 }
@@ -120,7 +128,7 @@ func TestPrepareFallsBackToPrefetch(t *testing.T) {
 		"store prefetch-file": `{"hash":"sha256-fallbackfallbackfallbackfallbackfallbackfal="}`,
 	})
 	// Make the hash check fail.
-	e.Nix.Runner.(*nix.FakeRunner).Matches["builtins.fetchTarball"] = nix.Response{
+	e.Nix.Runner.(*nix.FakeRunner).Matches["eval --raw --expr builtins.fetchTarball"] = nix.Response{
 		Result: &nix.Result{ExitCode: 1, Stderr: "hash mismatch"},
 		Err:    &nix.Error{Name: "nix", Code: 1, Stderr: "hash mismatch"},
 	}
@@ -152,7 +160,7 @@ func TestPrepareReportsUnchanged(t *testing.T) {
 	if !plan.Unchanged {
 		t.Fatal("an identical version should be reported as unchanged")
 	}
-	if fake.Called("build --no-link") {
+	if fake.Called("build --no-link --print-out-paths --expr") {
 		t.Error("nothing should be built when the version is unchanged")
 	}
 }
@@ -170,7 +178,7 @@ func TestPrepareForceBuildsAnyway(t *testing.T) {
 	if plan.Unchanged {
 		t.Fatal("--force must not short-circuit")
 	}
-	if !fake.Called("build --no-link") {
+	if !fake.Called("build --no-link --print-out-paths --expr") {
 		t.Error("--force should build")
 	}
 }
@@ -310,7 +318,7 @@ func TestRebuildUsesConfiguredCommand(t *testing.T) {
 // closure diff compares the wrong thing.
 func TestPrepareUsesDefaultOutputNotTheFirstBuiltPath(t *testing.T) {
 	e, _, _ := newTestEngine(t, map[string]string{
-		"build --no-link --print-out-paths": "/nix/store/zzz-ripgrep-14.1.1-man\n" + newOutPath + "\n",
+		"build --no-link --print-out-paths --expr": "/nix/store/zzz-ripgrep-14.1.1-man\n" + newOutPath + "\n",
 	})
 	plan, err := e.Prepare(context.Background(), Request{
 		Name:    "ripgrep",
@@ -336,5 +344,88 @@ func TestPlanEntriesAreParsed(t *testing.T) {
 	}
 	if plan.Entries[1].Kind != diff.KindUpgrade {
 		t.Errorf("got %v", plan.Entries[1].Kind)
+	}
+}
+
+// A candidate must be looked up through the same import the overlay performs,
+// carrying the system's nixpkgs config. Going through the flake reference would
+// evaluate with an empty config and refuse every unfree package.
+func TestPrepareEvaluatesWithTheSystemNixpkgsConfig(t *testing.T) {
+	e, fake, _ := newTestEngine(t, nil)
+	if _, err := e.Prepare(context.Background(), Request{
+		Name:    "ripgrep",
+		Current: pkgset.Package{Name: "ripgrep", Attr: "ripgrep", Version: "14.1.0", OutPath: oldOutPath},
+	}, nil); err != nil {
+		t.Fatal(err)
+	}
+
+	var evalCall, buildCall string
+	for _, c := range fake.Calls() {
+		line := c.String()
+		switch {
+		case strings.Contains(line, "eval --json --expr"):
+			evalCall = line
+		case strings.Contains(line, "build --no-link"):
+			buildCall = line
+		}
+	}
+	for name, line := range map[string]string{"eval": evalCall, "build": buildCall} {
+		if line == "" {
+			t.Fatalf("no %s call was made", name)
+		}
+		if strings.Contains(line, "github:NixOS/nixpkgs/"+testRev+"#") {
+			t.Errorf("%s went through the flake reference, which has an empty nixpkgs config:\n%s", name, line)
+		}
+		if !strings.Contains(line, "builtins.fetchTarball") || !strings.Contains(line, testHash) {
+			t.Errorf("%s does not import the pinned tarball:\n%s", name, line)
+		}
+		if !strings.Contains(line, `allowUnfree`) {
+			t.Errorf("%s does not carry the nixpkgs config:\n%s", name, line)
+		}
+		if !strings.Contains(line, `system = "x86_64-linux"`) {
+			t.Errorf("%s does not carry the system:\n%s", name, line)
+		}
+	}
+}
+
+func TestDerivationName(t *testing.T) {
+	cases := map[string]string{
+		"/nix/store/kx8yyv8xgnh8dflqx7ki6l06fi8zvgz0-vscode-with-extensions-1.136.1": "vscode-with-extensions",
+		"/nix/store/hkclq7d0j10l7gk1v2hpif398dvnq6lz-ripgrep-15.2.0":                 "ripgrep",
+		"/nix/store/hyz22a0l5b5kv7yfypw4ss6d36vbzg01-jq-1.8.2-bin":                   "jq",
+		"/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-hello":                          "hello",
+	}
+	for in, want := range cases {
+		if got := derivationName(in); got != want {
+			t.Errorf("derivationName(%q) = %q, want %q", in, got, want)
+		}
+	}
+}
+
+// vscode is installed as vscode-with-extensions.override; diffing that against
+// the bare attribute reported -680 MiB and every extension as removed.
+func TestPrepareSkipsTheDiffForWrappedPackages(t *testing.T) {
+	e, fake, _ := newTestEngine(t, nil)
+	plan, err := e.Prepare(context.Background(), Request{
+		Name: "ripgrep",
+		Current: pkgset.Package{
+			Name: "ripgrep", Attr: "ripgrep", Version: "14.1.0",
+			OutPath: "/nix/store/aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa-ripgrep-with-extras-14.1.0",
+		},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !plan.Wrapped() {
+		t.Fatal("the wrapper should have been detected")
+	}
+	if len(plan.Entries) != 0 || plan.OldSize != 0 {
+		t.Errorf("no closure diff should be computed: %+v", plan.Entries)
+	}
+	if fake.Called("store diff-closures") {
+		t.Error("diff-closures should not have been run")
+	}
+	if plan.NewVersion != "14.1.1" {
+		t.Errorf("the version bump must still be reported, got %q", plan.NewVersion)
 	}
 }

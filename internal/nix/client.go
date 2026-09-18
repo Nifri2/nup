@@ -94,8 +94,13 @@ func (c *Client) EvalJSON(ctx context.Context, installable, applyExpr string, v 
 }
 
 // EvalExprJSON evaluates a Nix expression and decodes the JSON result.
-func (c *Client) EvalExprJSON(ctx context.Context, expr string, v any) error {
-	res, err := c.run(ctx, "eval", "--json", "--expr", expr)
+// applyExpr may be empty.
+func (c *Client) EvalExprJSON(ctx context.Context, expr, applyExpr string, v any, opts ...EvalOption) error {
+	args := []string{"eval", "--json", "--expr", expr}
+	if applyExpr != "" {
+		args = append(args, "--apply", applyExpr)
+	}
+	res, err := c.run(ctx, apply(opts).extend(args)...)
 	if err != nil {
 		return err
 	}
@@ -112,6 +117,19 @@ func (c *Client) EvalRaw(ctx context.Context, installable string, opts ...EvalOp
 		return "", err
 	}
 	return strings.TrimSpace(res.Stdout), nil
+}
+
+// String renders s as a Nix double-quoted string literal. It is used to pass
+// JSON into an expression without another round of quoting rules.
+func String(s string) string {
+	r := strings.NewReplacer(
+		`\`, `\\`,
+		`"`, `\"`,
+		"$", `\$`,
+		"\n", `\n`,
+		"\t", `\t`,
+	)
+	return `"` + r.Replace(s) + `"`
 }
 
 // Metadata is the subset of `nix flake metadata --json` nup needs.
@@ -184,7 +202,18 @@ func (c *Client) CheckTarball(ctx context.Context, url, sha256 string) error {
 
 // Build realises an installable and returns its output paths.
 func (c *Client) Build(ctx context.Context, installable string) ([]string, error) {
-	res, err := c.run(ctx, "build", "--no-link", "--print-out-paths", installable)
+	return c.build(ctx, installable, []string{"build", "--no-link", "--print-out-paths", installable})
+}
+
+// BuildExpr realises a Nix expression and returns its output paths.
+func (c *Client) BuildExpr(ctx context.Context, expr string) ([]string, error) {
+	return c.build(ctx, "--expr", []string{"build", "--no-link", "--print-out-paths", "--expr", expr})
+}
+
+// build runs a build command and collects the printed store paths. what only
+// names the target in the error message.
+func (c *Client) build(ctx context.Context, what string, args []string) ([]string, error) {
+	res, err := c.run(ctx, args...)
 	if err != nil {
 		return nil, err
 	}
@@ -195,7 +224,7 @@ func (c *Client) Build(ctx context.Context, installable string) ([]string, error
 		}
 	}
 	if len(paths) == 0 {
-		return nil, fmt.Errorf("`nix build %s` produced no output path", installable)
+		return nil, fmt.Errorf("`nix build %s` produced no output path", what)
 	}
 	return paths, nil
 }
