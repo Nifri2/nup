@@ -91,20 +91,79 @@ func TestHashFile(t *testing.T) {
 	}
 }
 
-func TestReadFlakeLockInput(t *testing.T) {
+func writeLock(t *testing.T, content string) string {
+	t.Helper()
 	dir := t.TempDir()
-	if in, err := ReadFlakeLockInput(dir, "nixpkgs"); err != nil || in != nil {
-		t.Errorf("a missing flake.lock is not an error: %v %v", in, err)
-	}
-	content := `{"nodes":{"nixpkgs":{"locked":{"rev":"deadbeef","narHash":"sha256-x","lastModified":1700000000}}},"root":"root"}`
 	if err := os.WriteFile(filepath.Join(dir, "flake.lock"), []byte(content), 0o644); err != nil {
 		t.Fatal(err)
 	}
+	return dir
+}
+
+func TestReadFlakeLockInput(t *testing.T) {
+	if in, err := ReadFlakeLockInput(t.TempDir(), "nixpkgs"); err != nil || in != nil {
+		t.Errorf("a missing flake.lock is not an error: %v %v", in, err)
+	}
+
+	dir := writeLock(t, `{
+	  "root": "root",
+	  "nodes": {
+	    "root": {"inputs": {"nixpkgs": "nixpkgs"}},
+	    "nixpkgs": {"locked": {"rev": "deadbeef", "narHash": "sha256-x", "lastModified": 1700000000}}
+	  }
+	}`)
 	in, err := ReadFlakeLockInput(dir, "nixpkgs")
 	if err != nil || in == nil || in.Rev != "deadbeef" {
 		t.Fatalf("got %+v, %v", in, err)
 	}
 	if other, err := ReadFlakeLockInput(dir, "home-manager"); err != nil || other != nil {
 		t.Errorf("an absent input should be nil: %+v %v", other, err)
+	}
+}
+
+// When a transitive input already claims the name "nixpkgs", the flake's own
+// nixpkgs is stored under "nixpkgs_2". Reading by node name would pick the
+// wrong revision and mis-report which pins are stale.
+func TestReadFlakeLockInputResolvesThroughRoot(t *testing.T) {
+	dir := writeLock(t, `{
+	  "root": "root",
+	  "nodes": {
+	    "root": {"inputs": {"nixpkgs": "nixpkgs_2", "yeetmouse": "yeetmouse"}},
+	    "nixpkgs": {"locked": {"rev": "transitive", "lastModified": 1}},
+	    "nixpkgs_2": {"locked": {"rev": "mine", "lastModified": 2}},
+	    "yeetmouse": {"inputs": {"nixpkgs": "nixpkgs"}, "locked": {"rev": "ym", "lastModified": 3}}
+	  }
+	}`)
+	in, err := ReadFlakeLockInput(dir, "nixpkgs")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if in == nil || in.Rev != "mine" {
+		t.Fatalf("got %+v, want the root's own nixpkgs", in)
+	}
+}
+
+// A "follows" input is a path to walk from the root, not a node name.
+func TestReadFlakeLockInputFollowsPath(t *testing.T) {
+	dir := writeLock(t, `{
+	  "root": "root",
+	  "nodes": {
+	    "root": {"inputs": {"nixpkgs": "nixpkgs_2", "nup": "nup"}},
+	    "nixpkgs_2": {"locked": {"rev": "mine", "lastModified": 2}},
+	    "nup": {"inputs": {"nixpkgs": ["nixpkgs"]}, "locked": {"rev": "nuprev", "lastModified": 4}}
+	  }
+	}`)
+	in, err := ReadFlakeLockInput(dir, "nup")
+	if err != nil || in == nil || in.Rev != "nuprev" {
+		t.Fatalf("got %+v, %v", in, err)
+	}
+}
+
+// A lock file without a root input map still resolves by node name.
+func TestReadFlakeLockInputFallsBackToNodeName(t *testing.T) {
+	dir := writeLock(t, `{"nodes":{"nixpkgs":{"locked":{"rev":"deadbeef","lastModified":1}}}}`)
+	in, err := ReadFlakeLockInput(dir, "nixpkgs")
+	if err != nil || in == nil || in.Rev != "deadbeef" {
+		t.Fatalf("got %+v, %v", in, err)
 	}
 }

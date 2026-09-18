@@ -319,7 +319,14 @@ func (e *Engine) Prepare(ctx context.Context, req Request, progress func(string)
 	if err != nil {
 		return nil, fmt.Errorf("building %s from nixpkgs %s: %w", attr, lock.ShortRev(rev), err)
 	}
-	plan.NewOutPath = paths[0]
+	// `nix build --print-out-paths` lists every installed output in no useful
+	// order -- for fzf it prints the 2 KiB man output first -- so the default
+	// output from the evaluation wins. Comparing the wrong output against the
+	// installed one would report a nonsensical closure diff.
+	plan.NewOutPath = meta.Out
+	if plan.NewOutPath == "" {
+		plan.NewOutPath = paths[0]
+	}
 
 	if plan.OldOutPath == "" {
 		// Nothing installed to compare against (a fresh pin of a package that
@@ -344,12 +351,16 @@ type pkgMeta struct {
 	Version   string `json:"version"`
 	Changelog string `json:"changelog"`
 	Homepage  string `json:"homepage"`
+	// Out is the default output. It is deliberately not called outPath: nix
+	// serialises any attribute set containing outPath as a bare string.
+	Out string `json:"out"`
 }
 
 // evalMeta reads version and metadata in a single evaluation.
 func (e *Engine) evalMeta(ctx context.Context, rev, attr string) (*pkgMeta, error) {
 	const apply = `p: {
   version = p.version or "";
+  out = p.outPath or "";
   changelog = let c = p.meta.changelog or ""; in if builtins.isList c then (if c == [] then "" else builtins.head c) else c;
   homepage = let h = p.meta.homepage or ""; in if builtins.isList h then (if h == [] then "" else builtins.head h) else h;
 }`

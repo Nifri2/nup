@@ -35,7 +35,8 @@ func newTestEngine(t *testing.T, extra map[string]string) (*Engine, *nix.FakeRun
 		// AttrExists
 		"--apply p: true": "true",
 		// evalMeta
-		"changelog = let c":                 `{"version":"14.1.1","changelog":"https://example.invalid/changelog","homepage":"https://example.invalid"}`,
+		"changelog = let c": `{"version":"14.1.1","out":"` + newOutPath +
+			`","changelog":"https://example.invalid/changelog","homepage":"https://example.invalid"}`,
 		"build --no-link --print-out-paths": newOutPath + "\n",
 		"store diff-closures": "pcre2: 10.43 → 10.44, 12.0 KiB\n" +
 			"ripgrep: 14.1.0 → 14.1.1, 4.0 KiB\n",
@@ -301,6 +302,25 @@ func TestRebuildUsesConfiguredCommand(t *testing.T) {
 	}
 	if !strings.Contains(out.String(), "nh os switch") {
 		t.Errorf("the command should be echoed, got %q", out.String())
+	}
+}
+
+// `nix build --print-out-paths` lists outputs in no useful order: for fzf the
+// man output comes first. The plan must use the default output instead, or the
+// closure diff compares the wrong thing.
+func TestPrepareUsesDefaultOutputNotTheFirstBuiltPath(t *testing.T) {
+	e, _, _ := newTestEngine(t, map[string]string{
+		"build --no-link --print-out-paths": "/nix/store/zzz-ripgrep-14.1.1-man\n" + newOutPath + "\n",
+	})
+	plan, err := e.Prepare(context.Background(), Request{
+		Name:    "ripgrep",
+		Current: pkgset.Package{Name: "ripgrep", Attr: "ripgrep", Version: "14.1.0", OutPath: oldOutPath},
+	}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if plan.NewOutPath != newOutPath {
+		t.Errorf("NewOutPath = %q, want the default output %q", plan.NewOutPath, newOutPath)
 	}
 }
 
