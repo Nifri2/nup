@@ -130,3 +130,19 @@ func TestTarballURLAndFlakeRef(t *testing.T) {
 		t.Errorf("got %q", got)
 	}
 }
+
+// A whole Nix expression passed to --apply must not drown the error message.
+func TestErrorAbbreviatesLongArguments(t *testing.T) {
+	long := strings.Repeat("x", 500)
+	e := &Error{Name: "nix", Args: []string{"eval", "--apply", long}, Code: 1, Stderr: "error: boom"}
+	msg := e.Error()
+	if strings.Contains(msg, long) {
+		t.Error("a very long argument should be abbreviated")
+	}
+	if !strings.Contains(msg, "…") || !strings.Contains(msg, "nix eval --apply") {
+		t.Errorf("got %q", msg)
+	}
+	if !strings.Contains(msg, "error: boom") {
+		t.Error("nix's own stderr must still be shown")
+	}
+}

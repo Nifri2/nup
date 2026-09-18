@@ -10,6 +10,7 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"strconv"
 	"strings"
 	"time"
 )
@@ -40,8 +41,7 @@ type Error struct {
 }
 
 func (e *Error) Error() string {
-	cmd := e.Name + " " + strings.Join(e.Args, " ")
-	msg := fmt.Sprintf("command failed: %s", cmd)
+	msg := fmt.Sprintf("command failed: %s", shortCommand(e.Name, e.Args))
 	if e.Code != 0 {
 		msg = fmt.Sprintf("%s (exit %d)", msg, e.Code)
 	}
@@ -54,6 +54,25 @@ func (e *Error) Error() string {
 }
 
 func (e *Error) Unwrap() error { return e.Err }
+
+// shortCommand renders the command line for an error message. Long arguments --
+// nup passes whole Nix expressions to --apply -- are abbreviated so the message
+// stays readable; the interesting part is nix's stderr below it.
+func shortCommand(name string, args []string) string {
+	const maxArg = 120
+	parts := make([]string, 0, len(args)+1)
+	parts = append(parts, name)
+	for _, a := range args {
+		if len(a) > maxArg {
+			a = a[:maxArg-1] + "…"
+		}
+		if strings.ContainsAny(a, " \t\n") {
+			a = strconv.Quote(a)
+		}
+		parts = append(parts, a)
+	}
+	return strings.Join(parts, " ")
+}
 
 func indent(s string) string {
 	lines := strings.Split(s, "\n")
