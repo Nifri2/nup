@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 
@@ -33,6 +34,52 @@ const DefaultBranch = "nixos-unstable"
 
 // DefaultRebuildCommand is templated with {action}, {flake} and {host}.
 var DefaultRebuildCommand = []string{"sudo", "nixos-rebuild", "{action}", "--flake", "{flake}#{host}"}
+
+// RebuildTool is a rebuild front-end nup knows how to drive.
+type RebuildTool struct {
+	// Binary has to be on PATH for the tool to be chosen.
+	Binary string
+	// Command is the templated argv.
+	Command []string
+	// Note explains the choice to the user.
+	Note string
+}
+
+// RebuildTools are tried in order when `nup init` writes a fresh config.
+// nh comes first: someone who installed it wants to rebuild with it, and it
+// elevates on its own, so no sudo prefix.
+var RebuildTools = []RebuildTool{
+	{
+		Binary:  "nh",
+		Command: []string{"nh", "os", "{action}", "{flake}", "--hostname", "{host}"},
+		Note:    "nh handles privilege elevation itself, so there is no sudo in front",
+	},
+	{
+		Binary:  "nixos-rebuild",
+		Command: DefaultRebuildCommand,
+	},
+}
+
+// LookPath resolves a binary, so tests can pretend a tool is or is not present.
+type LookPath func(string) (string, error)
+
+// DetectRebuildCommand returns the command for the first known tool on PATH,
+// together with the tool. Detection happens once, in `nup init`, and the result
+// is written to the config file: a tool that runs something under sudo should
+// not silently change what it runs because PATH changed. When nothing is found
+// it falls back to nixos-rebuild, which every NixOS system has.
+func DetectRebuildCommand(look LookPath) ([]string, RebuildTool) {
+	if look == nil {
+		look = exec.LookPath
+	}
+	for _, t := range RebuildTools {
+		if _, err := look(t.Binary); err == nil {
+			return append([]string(nil), t.Command...), t
+		}
+	}
+	fallback := RebuildTools[len(RebuildTools)-1]
+	return append([]string(nil), fallback.Command...), fallback
+}
 
 // HomeManager configures the optional home-manager package source.
 type HomeManager struct {

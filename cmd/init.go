@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"context"
 
@@ -68,10 +69,23 @@ func runInit(ctx context.Context, app *App, force, gitAdd, noGit bool) error {
 		cfg := config.Default()
 		cfg.Flake = app.FlakeDir
 		cfg.Host = app.Host
+		// Whatever the user rebuilds with today is almost certainly what they
+		// want nup to use. The choice is written to the config rather than
+		// redone on every run, so a change in PATH cannot quietly change what
+		// nup executes under sudo.
+		rebuild, tool := config.DetectRebuildCommand(nil)
+		cfg.RebuildCommand = rebuild
 		if err := cfg.Save(cfgPath); err != nil {
 			return err
 		}
 		fmt.Fprintf(app.Out, "created %s\n", cfgPath)
+		fmt.Fprintf(app.Out, "  rebuild with %s: %s\n",
+			s.Bold.Render(tool.Binary),
+			s.Dim.Render(strings.Join(cfg.RebuildArgs(config.ActionSwitch, app.FlakeDir, app.Host), " ")))
+		if tool.Note != "" {
+			fmt.Fprintf(app.Out, "  %s\n", s.Dim.Render(tool.Note))
+		}
+		fmt.Fprintf(app.Out, "  %s\n", s.Dim.Render("change rebuild-command in the config to use something else"))
 	} else {
 		fmt.Fprintf(app.Out, "kept %s\n", cfgPath)
 	}

@@ -92,6 +92,12 @@ and prints the snippet you need to add **once** to a NixOS module:
 }
 ```
 
+`init` also picks the rebuild command: if [`nh`](https://github.com/nix-community/nh)
+is on your PATH it is used (without `sudo` — nh elevates on its own), otherwise
+plain `sudo nixos-rebuild`. It says which one it chose and writes the choice into
+the config, so a later change in `PATH` cannot quietly change what nup runs under
+sudo. Edit `rebuild-command` to use something else.
+
 > **Git flakes:** nix only sees files that git knows about. If your flake is a git
 > repository, the generated files must be tracked or nix will silently ignore your
 > pins. `nup init` detects this and offers to `git add` them; every other command
@@ -229,7 +235,8 @@ output: table
 impure: false
 ```
 
-Using [`nh`](https://github.com/nix-community/nh) instead:
+Using [`nh`](https://github.com/nix-community/nh) instead — this is what `nup init`
+writes when nh is installed:
 
 ```yaml
 rebuild-command: [nh, os, "{action}", "{flake}", --hostname, "{host}"]
@@ -248,7 +255,7 @@ Turn it on to include `home.packages` as well:
 ```yaml
 home-manager:
   enable: true
-  user: niklas
+  user: alice
 ```
 
 The `SOURCE` column then shows `system` or `home`. This reads

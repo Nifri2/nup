@@ -14,7 +14,7 @@
       ];
       forAllSystems = f: nixpkgs.lib.genAttrs systems (system: f nixpkgs.legacyPackages.${system});
 
-      version = "0.3.0";
+      version = "0.4.0";
     in
     {
       packages = forAllSystems (pkgs: rec {
