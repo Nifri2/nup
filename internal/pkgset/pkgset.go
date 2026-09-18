@@ -29,7 +29,16 @@ const (
 // The store path is returned as `out`, not `outPath`: nix serialises any
 // attribute set containing an `outPath` attribute as a bare string, which would
 // collapse each record into just its path.
-const applyExpr = `ps: map (p:
+const applyExpr = `ps:
+let
+  # meta.changelog and meta.homepage may be a string or a list of strings.
+  first = v:
+    if v == null then null
+    else if builtins.isList v then (if v == [ ] then null else builtins.head v)
+    else if builtins.isString v then v
+    else null;
+in
+map (p:
   if !(builtins.isAttrs p) then {
     name = builtins.toString p;
     pname = null;
@@ -43,8 +52,8 @@ const applyExpr = `ps: map (p:
     pname = p.pname or null;
     version = p.version or null;
     out = p.outPath or "";
-    changelog = p.meta.changelog or null;
-    homepage = p.meta.homepage or null;
+    changelog = first (p.meta.changelog or null);
+    homepage = first (p.meta.homepage or null);
     description = p.meta.description or null;
   }) ps`
 
@@ -86,6 +95,9 @@ type Lister struct {
 	Host     string
 	// HomeManagerUser enables the home-manager source when non-empty.
 	HomeManagerUser string
+	// Impure evaluates the configuration with --impure. Needed by flakes that
+	// read absolute paths or fetch without a hash.
+	Impure bool
 }
 
 // Options controls one List call.
@@ -163,7 +175,7 @@ func (l *Lister) List(ctx context.Context, lf *lock.File, mainRev string, opts O
 
 func (l *Lister) eval(ctx context.Context, installable string, src Source) ([]Package, error) {
 	var rows []raw
-	if err := l.Nix.EvalJSON(ctx, installable, applyExpr, &rows); err != nil {
+	if err := l.Nix.EvalJSON(ctx, installable, applyExpr, &rows, nix.Impure(l.Impure)); err != nil {
 		return nil, err
 	}
 	out := make([]Package, 0, len(rows))

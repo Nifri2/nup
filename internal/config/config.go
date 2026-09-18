@@ -50,6 +50,10 @@ type Config struct {
 	AfterUpdate    Action      `yaml:"after-update"`
 	AutoCommit     bool        `yaml:"auto-commit"`
 	Output         string      `yaml:"output"`
+	// Impure evaluates the system configuration with --impure. Some flakes
+	// genuinely need it, for example when a module reads an absolute path or
+	// fetches without a hash.
+	Impure bool `yaml:"impure"`
 }
 
 // Default returns the configuration used when no file exists.
@@ -121,6 +125,7 @@ func merge(dst, src *Config) {
 	}
 	dst.HomeManager = src.HomeManager
 	dst.AutoCommit = src.AutoCommit
+	dst.Impure = src.Impure
 }
 
 // Validate rejects values that would only fail much later.

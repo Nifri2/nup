@@ -1,10 +1,12 @@
 package pkgset
 
 import (
+	"context"
 	"testing"
 	"time"
 
 	"github.com/Nifri2/nup/internal/lock"
+	"github.com/Nifri2/nup/internal/nix"
 )
 
 func TestSplitName(t *testing.T) {
@@ -94,5 +96,16 @@ func TestFind(t *testing.T) {
 	}
 	if got := Find(pkgs, "nope"); len(got) != 0 {
 		t.Error("unknown package should not match")
+	}
+}
+
+func TestListPassesImpureThrough(t *testing.T) {
+	fake := nix.NewFake(map[string]string{"eval": "[]"})
+	l := &Lister{Nix: nix.NewClient(fake), FlakeDir: t.TempDir(), Host: "nixos", Impure: true}
+	if _, err := l.List(context.Background(), lock.New(), "", Options{Refresh: true}); err != nil {
+		t.Fatal(err)
+	}
+	if !fake.Called("--impure") {
+		t.Errorf("the configuration should have been evaluated impurely: %v", fake.Calls())
 	}
 }

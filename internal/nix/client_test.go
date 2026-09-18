@@ -146,3 +146,31 @@ func TestErrorAbbreviatesLongArguments(t *testing.T) {
 		t.Error("nix's own stderr must still be shown")
 	}
 }
+
+// --impure is opt-in and must only appear when asked for: nup applies it to the
+// user's own flake, never to nixpkgs lookups.
+func TestEvalImpureIsOptIn(t *testing.T) {
+	fake := NewFake(map[string]string{"eval": "{}"})
+	c := NewClient(fake)
+	var out map[string]any
+
+	_ = c.EvalJSON(context.Background(), "x#y", "", &out)
+	if strings.Contains(fake.Calls()[0].String(), "--impure") {
+		t.Error("--impure must not be added by default")
+	}
+
+	_ = c.EvalJSON(context.Background(), "x#y", "", &out, Impure(true))
+	if !strings.Contains(fake.Calls()[1].String(), "--impure") {
+		t.Errorf("--impure was not passed: %q", fake.Calls()[1])
+	}
+
+	_, _ = c.EvalRaw(context.Background(), "x#y", Impure(true))
+	if !strings.Contains(fake.Calls()[2].String(), "--impure") {
+		t.Errorf("--impure was not passed to EvalRaw: %q", fake.Calls()[2])
+	}
+
+	_ = c.EvalJSON(context.Background(), "x#y", "", &out, Impure(false))
+	if strings.Contains(fake.Calls()[3].String(), "--impure") {
+		t.Error("Impure(false) must not add the flag")
+	}
+}

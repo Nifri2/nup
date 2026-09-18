@@ -66,6 +66,23 @@ output: json
 	}
 }
 
+func TestImpureDefaultsOffAndCanBeEnabled(t *testing.T) {
+	if Default().Impure {
+		t.Error("impure must default to off")
+	}
+	path := filepath.Join(t.TempDir(), "config.yaml")
+	if err := os.WriteFile(path, []byte("impure: true\n"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	cfg, err := Load(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !cfg.Impure {
+		t.Error("impure: true was not picked up")
+	}
+}
+
 func TestValidateRejectsBadValues(t *testing.T) {
 	cases := map[string]func(*Config){
 		"bad action": func(c *Config) { c.AfterUpdate = "reboot" },

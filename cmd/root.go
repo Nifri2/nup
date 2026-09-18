@@ -60,6 +60,7 @@ type App struct {
 	flagHost    string
 	flagOutput  string
 	flagNoColor bool
+	flagImpure  bool
 }
 
 // ExecuteContext runs the root command and returns the process exit code.
@@ -104,6 +105,7 @@ func NewRootCommand(app *App) *cobra.Command {
 	f.StringVar(&app.flagHost, "host", "", "nixosConfigurations attribute to use (default: hostname)")
 	f.BoolVar(&app.Refresh, "refresh", false, "ignore cached evaluation results")
 	f.BoolVar(&app.flagNoColor, "no-color", false, "disable colored output (NO_COLOR is also honored)")
+	f.BoolVar(&app.flagImpure, "impure", false, "evaluate the configuration with --impure")
 
 	root.AddCommand(
 		newInitCommand(app),
@@ -178,6 +180,7 @@ func (a *App) setup(cmd *cobra.Command) error {
 		FlakeDir:        a.FlakeDir,
 		Host:            a.Host,
 		HomeManagerUser: hmUser,
+		Impure:          cfg.Impure || a.flagImpure,
 	}
 	a.Engine = &update.Engine{
 		Nix:      a.Nix,

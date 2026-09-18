@@ -49,14 +49,41 @@ func (c *Client) run(ctx context.Context, rest ...string) (*Result, error) {
 	return c.Runner.Run(ctx, c.bin(), c.args(rest...))
 }
 
+// EvalOption tunes a single evaluation.
+type EvalOption func(*evalOpts)
+
+type evalOpts struct{ impure bool }
+
+// Impure adds --impure. Some configurations genuinely need it, for example when
+// a module reads an absolute path or fetches without a hash; nup only applies it
+// to evaluations of the user's own flake, never to nixpkgs lookups.
+func Impure(on bool) EvalOption {
+	return func(o *evalOpts) { o.impure = on }
+}
+
+func apply(opts []EvalOption) evalOpts {
+	var o evalOpts
+	for _, fn := range opts {
+		fn(&o)
+	}
+	return o
+}
+
+func (o evalOpts) extend(args []string) []string {
+	if o.impure {
+		return append(args, "--impure")
+	}
+	return args
+}
+
 // EvalJSON evaluates an installable and decodes the JSON result into v.
 // apply may be empty.
-func (c *Client) EvalJSON(ctx context.Context, installable, apply string, v any) error {
+func (c *Client) EvalJSON(ctx context.Context, installable, applyExpr string, v any, opts ...EvalOption) error {
 	args := []string{"eval", "--json", installable}
-	if apply != "" {
-		args = append(args, "--apply", apply)
+	if applyExpr != "" {
+		args = append(args, "--apply", applyExpr)
 	}
-	res, err := c.run(ctx, args...)
+	res, err := c.run(ctx, apply(opts).extend(args)...)
 	if err != nil {
 		return err
 	}
@@ -79,8 +106,8 @@ func (c *Client) EvalExprJSON(ctx context.Context, expr string, v any) error {
 }
 
 // EvalRaw evaluates an installable to a bare string, e.g. a version.
-func (c *Client) EvalRaw(ctx context.Context, installable string) (string, error) {
-	res, err := c.run(ctx, "eval", "--raw", installable)
+func (c *Client) EvalRaw(ctx context.Context, installable string, opts ...EvalOption) (string, error) {
+	res, err := c.run(ctx, apply(opts).extend([]string{"eval", "--raw", installable})...)
 	if err != nil {
 		return "", err
 	}

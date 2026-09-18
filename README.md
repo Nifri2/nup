@@ -115,6 +115,7 @@ and prints the snippet you need to add **once** to a NixOS module:
 | `--host <name>` | `nixosConfigurations` attribute. Default: your hostname |
 | `--refresh` | Ignore cached evaluation results |
 | `--no-color` | Disable color (`NO_COLOR` is honored too, and color turns off automatically without a TTY) |
+| `--impure` | Evaluate the configuration with `--impure` |
 
 ### Flags for `update` and `pin`
 
@@ -216,6 +217,10 @@ after-update: ask
 
 auto-commit: false
 output: table
+
+# Some configurations genuinely need impure evaluation, for example when a
+# module reads an absolute path or fetches without a hash.
+impure: false
 ```
 
 Using [`nh`](https://github.com/nix-community/nh) instead:
@@ -264,6 +269,10 @@ it.
   `python3.withPackages`. Pin the top-level package where you can.
 - **GitHub only.** The overlay fetches from `github.com/NixOS/nixpkgs`. Forks and
   other mirrors are not supported yet.
+- **Impure configurations.** If your flake needs `--impure` — an `IFD`, a module
+  reading an absolute path, `builtins.fetchTarball` without a hash — set
+  `impure: true` in the config or pass `--impure`. nup only applies it to your own
+  flake; the nixpkgs lookups it does stay pure.
 
 ## Development
 
