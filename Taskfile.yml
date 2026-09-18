@@ -1,0 +1,129 @@
+version: "3"
+
+vars:
+  BIN: nup
+  PKG: github.com/Nifri2/nup
+  VERSION:
+    sh: git describe --tags --always --dirty 2>/dev/null || echo dev
+  LDFLAGS: -s -w -X main.version={{.VERSION}}
+
+env:
+  CGO_ENABLED: "0"
+
+tasks:
+  default:
+    desc: List the available tasks
+    cmds:
+      - task --list
+    silent: true
+
+  build:
+    desc: Build the nup binary into ./nup
+    sources:
+      - "**/*.go"
+      - go.mod
+      - go.sum
+      - internal/overlay/nup-overlay.nix
+    generates:
+      - "{{.BIN}}"
+    cmds:
+      - go build -ldflags '{{.LDFLAGS}}' -o {{.BIN}} .
+
+  run:
+    desc: "Build and run nup (pass args after --, e.g. task run -- list)"
+    deps: [build]
+    cmds:
+      - ./{{.BIN}} {{.CLI_ARGS}}
+
+  test:
+    desc: Run the unit tests
+    cmds:
+      - go test ./...
+
+  test:race:
+    desc: Run the unit tests with the race detector
+    env:
+      CGO_ENABLED: "1"
+    cmds:
+      - go test -race ./...
+
+  test:cover:
+    desc: Run the tests and write an HTML coverage report
+    cmds:
+      - go test -coverprofile=coverage.out ./...
+      - go tool cover -html=coverage.out -o coverage.html
+      - go tool cover -func=coverage.out | tail -1
+
+  fmt:
+    desc: Format the Go and Nix sources
+    cmds:
+      - gofmt -w .
+      - nix fmt 2>/dev/null || true
+
+  vet:
+    desc: Run go vet
+    cmds:
+      - go vet ./...
+
+  lint:
+    desc: Run golangci-lint if it is available
+    cmds:
+      - golangci-lint run ./... || echo "golangci-lint not available, skipping"
+
+  tidy:
+    desc: Tidy go.mod and go.sum
+    cmds:
+      - go mod tidy
+
+  ci:
+    desc: Everything CI runs
+    cmds:
+      - task: fmt
+      - task: vet
+      - task: test
+      - task: nix:build
+
+  nix:build:
+    desc: Build the flake package
+    cmds:
+      - nix build .#nup --no-link --print-out-paths
+
+  nix:run:
+    desc: "Run nup through the flake (pass args after --)"
+    cmds:
+      - nix run .# -- {{.CLI_ARGS}}
+
+  nix:check:
+    desc: Evaluate every flake output
+    cmds:
+      - nix flake check
+
+  nix:vendor-hash:
+    desc: Recompute vendorHash after changing dependencies
+    cmds:
+      - |
+        set -e
+        sed -i 's|vendorHash = "sha256-[^"]*"|vendorHash = "sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA="|' flake.nix
+        got=$(nix build .#nup --no-link 2>&1 | awk '/got: /{print $2}')
+        if [ -z "$got" ]; then echo "vendorHash is already correct"; git checkout flake.nix 2>/dev/null || true; exit 0; fi
+        sed -i "s|vendorHash = \"sha256-AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA=\"|vendorHash = \"$got\"|" flake.nix
+        echo "vendorHash = $got"
+
+  install:
+    desc: Install nup into the Go bin directory
+    cmds:
+      - go install -ldflags '{{.LDFLAGS}}' .
+
+  completions:
+    desc: Write shell completions into ./completions
+    deps: [build]
+    cmds:
+      - mkdir -p completions
+      - ./{{.BIN}} completion bash > completions/nup.bash
+      - ./{{.BIN}} completion zsh  > completions/_nup
+      - ./{{.BIN}} completion fish > completions/nup.fish
+
+  clean:
+    desc: Remove build artifacts
+    cmds:
+      - rm -rf {{.BIN}} completions coverage.out coverage.html result result-*
