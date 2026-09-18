@@ -1,0 +1,7 @@
+/nup
+/dist/
+/result
+/result-*
+/coverage.out
+/coverage.html
+.direnv/
